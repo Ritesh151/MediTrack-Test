@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useChat } from '@/context/ChatContext';
 import { useTickets } from '@/context/TicketContext';
 import { TicketShimmer } from '@/components/Shimmer';
+import { CustomInput } from '@/components/CustomInput';
 
 export default function TicketDetailsPage() {
   const router = useRouter();
@@ -13,12 +14,20 @@ export default function TicketDetailsPage() {
   const ticketId = params.id as string;
   
   const { user, isLoading: authLoading } = useAuth();
-  const { getTicketById } = useTickets();
+  const { getTicketById, replyToTicket, updateTicketStatus } = useTickets();
   const { messages, isLoading: chatLoading, loadMessages, sendMessage } = useChat();
   
   const [ticket, setTicket] = useState<any>(null);
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [showReplyModal, setShowReplyModal] = useState(false);
+  const [replyData, setReplyData] = useState({
+    doctorName: '',
+    doctorPhone: '',
+    specialization: '',
+    replyMessage: '',
+  });
+  const [isReplying, setIsReplying] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -66,6 +75,25 @@ export default function TicketDetailsPage() {
     }
   };
 
+  const handleReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyData.doctorName || !replyData.specialization || !replyData.replyMessage) return;
+
+    setIsReplying(true);
+    try {
+      await replyToTicket(ticketId, replyData);
+      await updateTicketStatus(ticketId, 'resolved');
+      setShowReplyModal(false);
+      setReplyData({ doctorName: '', doctorPhone: '', specialization: '', replyMessage: '' });
+      loadTicketDetails();
+    } catch (err) {
+      console.error('Failed to reply:', err);
+      alert('Failed to send reply');
+    } finally {
+      setIsReplying(false);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-warning/10 text-warning border-warning/30';
@@ -90,6 +118,11 @@ export default function TicketDetailsPage() {
       minute: '2-digit',
     });
   };
+
+  const isAdmin = user?.role === 'admin' || user?.role === 'super';
+  const canReply = isAdmin && ticket?.assignedAdminId && 
+    ((typeof ticket.assignedAdminId === 'object' && ticket.assignedAdminId._id === user?._id) ||
+     (typeof ticket.assignedAdminId === 'string' && ticket.assignedAdminId === user?.id));
 
   if (authLoading || !user) {
     return (
@@ -133,6 +166,14 @@ export default function TicketDetailsPage() {
           <div className="flex-1">
             <h1 className="text-lg font-semibold">Ticket Details</h1>
           </div>
+          {isAdmin && (
+            <button
+              onClick={() => setShowReplyModal(true)}
+              className="px-4 py-2 bg-success text-white rounded-lg font-semibold hover:bg-green-600 transition-colors text-sm"
+            >
+              Send Reply
+            </button>
+          )}
         </div>
       </header>
 
@@ -146,6 +187,9 @@ export default function TicketDetailsPage() {
           </div>
           <h2 className="text-xl font-bold text-text-primary mb-1">{ticket.issueTitle}</h2>
           <p className="text-text-secondary">{ticket.description}</p>
+          {ticket.patient && (
+            <p className="text-sm text-text-tertiary mt-2">From: {ticket.patient.name} ({ticket.patient.email})</p>
+          )}
         </div>
 
         {ticket.reply && (
@@ -156,10 +200,21 @@ export default function TicketDetailsPage() {
               </svg>
               <span className="font-bold text-success">Doctor Recommendation</span>
             </div>
-            <div className="space-y-1 text-sm">
-              <p><strong>Doctor:</strong> {ticket.reply.doctorName}</p>
-              <p><strong>Specialization:</strong> {ticket.reply.specialization}</p>
-              <p><strong>Phone:</strong> {ticket.reply.doctorPhone}</p>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <span className="text-text-secondary">Doctor:</span>
+                <span className="ml-2 font-semibold">{ticket.reply.doctorName}</span>
+              </div>
+              <div>
+                <span className="text-text-secondary">Specialization:</span>
+                <span className="ml-2 font-semibold">{ticket.reply.specialization}</span>
+              </div>
+              {ticket.reply.doctorPhone && (
+                <div>
+                  <span className="text-text-secondary">Phone:</span>
+                  <span className="ml-2 font-semibold">{ticket.reply.doctorPhone}</span>
+                </div>
+              )}
             </div>
             <div className="mt-3 pt-3 border-t border-success/20">
               <p className="text-sm font-semibold mb-1">Message:</p>
@@ -250,6 +305,94 @@ export default function TicketDetailsPage() {
           </div>
         </form>
       </main>
+
+      {showReplyModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg animate-slide-up">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-text-primary">Send Doctor Recommendation</h2>
+              <button onClick={() => setShowReplyModal(false)} className="text-text-tertiary hover:text-text-primary">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <form onSubmit={handleReply} className="space-y-4">
+              <CustomInput
+                label="Doctor Name *"
+                placeholder="Enter doctor's name"
+                value={replyData.doctorName}
+                onChange={(e) => setReplyData({ ...replyData, doctorName: e.target.value })}
+              />
+
+              <div className="w-full">
+                <label className="block text-sm font-medium text-text-secondary mb-2">
+                  Specialization *
+                </label>
+                <select
+                  value={replyData.specialization}
+                  onChange={(e) => setReplyData({ ...replyData, specialization: e.target.value })}
+                  className="w-full px-4 py-3 rounded-lg border border-card-border focus:outline-none focus:ring-2 focus:ring-primary"
+                  required
+                >
+                  <option value="">Select specialization</option>
+                  <option value="General Physician">General Physician</option>
+                  <option value="Cardiologist">Cardiologist</option>
+                  <option value="Dermatologist">Dermatologist</option>
+                  <option value="Orthopedic">Orthopedic</option>
+                  <option value="Neurologist">Neurologist</option>
+                  <option value="Pediatrician">Pediatrician</option>
+                  <option value="Gynecologist">Gynecologist</option>
+                  <option value="ENT Specialist">ENT Specialist</option>
+                  <option value="Ophthalmologist">Ophthalmologist</option>
+                  <option value="Psychiatrist">Psychiatrist</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+
+              <CustomInput
+                label="Doctor Phone (Optional)"
+                placeholder="Enter phone number"
+                value={replyData.doctorPhone}
+                onChange={(e) => setReplyData({ ...replyData, doctorPhone: e.target.value })}
+                type="tel"
+              />
+
+              <div className="w-full">
+                <label className="block text-sm font-medium text-text-secondary mb-2">
+                  Recommendation Message *
+                </label>
+                <textarea
+                  value={replyData.replyMessage}
+                  onChange={(e) => setReplyData({ ...replyData, replyMessage: e.target.value })}
+                  placeholder="Enter your recommendation message to the patient"
+                  rows={4}
+                  className="w-full px-4 py-3 rounded-lg border border-card-border focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                  required
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowReplyModal(false)}
+                  className="flex-1 px-4 py-3 border border-card-border rounded-lg text-text-secondary font-semibold hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isReplying || !replyData.doctorName || !replyData.specialization || !replyData.replyMessage}
+                  className="flex-1 px-4 py-3 bg-success text-white rounded-lg font-semibold hover:bg-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isReplying ? 'Sending...' : 'Send Reply'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
